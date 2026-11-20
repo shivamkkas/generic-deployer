@@ -1,0 +1,15 @@
+# build output
+/bin/
+/dist/
+
+# live config and runtime state: contains passwords, hashes and session data
+deploy.yaml
+targets.yaml
+users.yaml
+sessions.json
+*.bak
+
+# editor / OS noise
+.idea/
+.vscode/
+.DS_Store

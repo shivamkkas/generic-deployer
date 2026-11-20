@@ -1,0 +1,38 @@
+# generic-deploy main config. Copy to deploy.yaml and `chmod 600 deploy.yaml`.
+# Targets and users are managed by the admin in the web UI. They are saved
+# next to this file in targets.yaml and users.yaml.
+
+listen: "0.0.0.0:8090"
+# tlsCert: /etc/generic-deploy/cert.pem      # recommended if reachable beyond a trusted network
+# tlsKey:  /etc/generic-deploy/key.pem
+
+# Built-in super admin: always has full control, can create other admins/users.
+auth:
+  user: admin
+  password: "CHANGE-ME"      # the service refuses to start while this is CHANGE-ME
+
+# When the console runs as a normal user, targets the admin marks "Use sudo"
+# run their commands and file access as root with this password (fed to
+# `sudo -S` on stdin, never on the command line). Leave empty if the console
+# runs as root. Can also be given as env GENERIC_DEPLOY_SUDO_PASSWORD.
+sudo:
+  password: ""
+
+# Every save keeps the previous version here: <backupDir>/<target>/<folder>/<path>.<timestamp>
+backupDir: /var/lib/generic-deploy/backups
+maxFileBytes: 1048576        # largest file the editor opens (downloads have no limit)
+
+# targetsFile: targets.yaml  # default: next to this file
+# usersFile:   users.yaml    # default: next to this file
+
+# Optional: targets to create on first start (after that, targets.yaml + the UI are the source).
+# targets:
+#   - name: alarm-engine
+#     type: compose
+#     dir: /opt/alarm-engine
+#     dirs: [/srv/alarm-engine/data]          # extra folders (volumes, config) for the file browser
+#   - name: edge-deployer
+#     type: systemd
+#     unit: edge-deployer.service
+#     dir: /opt/edge-deployer
+#     sudo: true

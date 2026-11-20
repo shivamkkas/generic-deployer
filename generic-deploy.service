@@ -1,0 +1,19 @@
+[Unit]
+Description=Generic deploy console (web UI for docker compose projects and systemd services)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/generic-deploy
+ExecStart=/opt/generic-deploy/generic-deploy -config /opt/generic-deploy/deploy.yaml
+# Option A (default): run as root. No sudo setup needed.
+# Option B: run as a normal user and set sudo.password in deploy.yaml; the admin
+# then ticks "Use sudo" on targets that need root. The user needs docker group
+# membership for non-sudo compose targets.
+#User=deploy
+#Group=deploy
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

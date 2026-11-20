@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deploy Console</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- login -->
+<div id="login-view" class="login-wrap" hidden>
+  <form id="login-form" class="card login" autocomplete="on">
+    <h1>Deploy Console</h1>
+    <p id="login-host" class="muted"></p>
+    <label>User<input name="user" class="input" autocomplete="username" required autofocus></label>
+    <label>Password<input name="password" type="password" class="input" autocomplete="current-password" required></label>
+    <div id="login-error" class="err"></div>
+    <button type="submit" class="btn primary">Sign in</button>
+  </form>
+</div>
+
+<div id="app-view" hidden>
+<div id="conn-banner" class="conn-banner" hidden>Connection to the console lost: reconnecting…</div>
+<header class="top">
+  <div class="brand">Deploy Console</div>
+  <div id="host" class="muted"></div>
+  <span class="grow"></span>
+  <span id="whoami" class="muted"></span>
+  <button id="logout" class="btn ghost">Sign out</button>
+</header>
+
+<div class="layout">
+  <nav class="side">
+    <div class="side-head">Targets</div>
+    <ul id="targets"></ul>
+    <div id="admin-nav" hidden>
+      <button id="add-target" class="btn add">+ Add target</button>
+      <div class="side-head admin-head">Admin</div>
+      <ul><li><button id="nav-users"><span class="tname">Users &amp; permissions</span></button></li></ul>
+    </div>
+  </nav>
+
+  <main id="main">
+    <section class="card" id="empty-card" hidden>
+      <h1 id="empty-title">No targets yet</h1>
+      <p id="empty-text" class="muted"></p>
+      <button id="empty-add" class="btn primary" hidden>+ Add target</button>
+    </section>
+
+    <!-- admin: add / edit a target -->
+    <section class="card" id="form-card" hidden>
+      <h1 id="form-title">Add target</h1>
+      <form id="target-form" class="form" autocomplete="off">
+        <label>Name<input name="name" class="input mono" required placeholder="alarm-engine"></label>
+        <label>Type
+          <select name="type" class="input">
+            <option value="compose">docker compose project</option>
+            <option value="systemd">systemd service</option>
+          </select>
+        </label>
+        <label class="wide">Description<input name="description" class="input" placeholder="optional"></label>
+        <label class="only-systemd">Unit<input name="unit" class="input mono" placeholder="edge-deployer.service"></label>
+        <label class="wide"><span id="dir-label">Compose project directory</span>
+          <input name="dir" class="input mono" placeholder="/opt/alarm-engine">
+        </label>
+        <label class="wide">Extra directories <span class="muted">(one per line: config, data, volume folders…)</span>
+          <textarea name="dirs" class="input mono" rows="3" placeholder="/etc/alarm-engine&#10;/srv/alarm-engine/data"></textarea>
+        </label>
+        <div class="wide only-compose" id="vol-row" hidden>
+          <button type="button" id="add-volumes" class="btn">Add the services' volume folders</button>
+          <span id="vol-status" class="muted"></span>
+        </div>
+        <label class="wide only-compose">Compose files <span class="muted">(optional, relative to the directory, one per line)</span>
+          <textarea name="composeFiles" class="input mono" rows="2" placeholder="docker-compose.yml&#10;docker-compose.prod.yml"></textarea>
+        </label>
+        <label class="wide">Extra command buttons <span class="muted">(name = program args, one per line; runs in the directory)</span>
+          <textarea name="commands" class="input mono" rows="3" placeholder="migrate = ./scripts/migrate.sh --up"></textarea>
+        </label>
+        <label class="check"><input type="checkbox" name="readOnly"> Files are read-only for everyone (view, no saving)</label>
+        <label class="check"><input type="checkbox" name="sudo"> Use sudo: run this target's commands and file access as root
+          <span id="sudo-note" class="muted small"></span></label>
+        <div class="form-actions wide">
+          <span id="form-error" class="err"></span>
+          <span class="grow"></span>
+          <button type="button" id="form-cancel" class="btn ghost">Cancel</button>
+          <button type="submit" class="btn primary">Save target</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- admin: users -->
+    <section class="card" id="users-card" hidden>
+      <div class="bar">
+        <h1>Users &amp; permissions</h1>
+        <span class="grow"></span>
+        <button id="user-new" class="btn primary">+ New user</button>
+      </div>
+      <p class="muted" id="builtin-note"></p>
+      <table class="table">
+        <thead><tr><th>User</th><th>Role</th><th>Targets</th><th></th></tr></thead>
+        <tbody id="user-rows"></tbody>
+      </table>
+    </section>
+
+    <section class="card" id="user-form-card" hidden>
+      <h1 id="user-form-title">New user</h1>
+      <form id="user-form" class="form" autocomplete="off">
+        <label>User name<input name="name" class="input mono" required placeholder="ravi"></label>
+        <label><span id="pw-label">Password</span><input name="password" type="password" class="input" autocomplete="new-password" placeholder="min 8 characters"></label>
+        <label class="check"><input type="checkbox" name="admin"> Admin: full control of every target, user and path</label>
+        <label class="check"><input type="checkbox" name="disabled"> Disabled (cannot sign in)</label>
+        <div class="wide" id="grants-wrap">
+          <h2>Access per target</h2>
+          <p class="muted small">For each target, tick what this user may do. With no services ticked, the actions apply to the whole compose project. With services ticked, the user can only act on those services.</p>
+          <div id="grants"></div>
+        </div>
+        <div class="form-actions wide">
+          <span id="user-form-error" class="err"></span>
+          <span class="grow"></span>
+          <button type="button" id="user-delete" class="btn ghost danger" hidden>Delete user</button>
+          <button type="button" id="user-cancel" class="btn ghost">Cancel</button>
+          <button type="submit" class="btn primary">Save user</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card" id="target-card" hidden>
+      <div class="target-head">
+        <div>
+          <h1 id="t-name">—</h1>
+          <div id="t-meta" class="muted mono"></div>
+          <div id="t-desc" class="muted"></div>
+        </div>
+        <div class="head-right">
+          <span id="t-state" class="pill">…</span>
+          <button id="edit-target" class="btn ghost admin-only">Edit</button>
+          <button id="delete-target" class="btn ghost danger admin-only">Delete</button>
+        </div>
+      </div>
+      <div id="t-problem" class="problem" hidden></div>
+      <div class="svc-row" id="svc-row" hidden>
+        <label>Service
+          <select id="svc-select" class="input mono"></select>
+        </label>
+        <span id="svc-note" class="muted small"></span>
+      </div>
+      <div id="actions" class="actions"></div>
+      <div class="dl-row" id="dl-row">
+        <span class="muted small">Download:</span>
+        <span id="dl-logs-wrap">
+          <select id="dl-since" class="input" title="How far back">
+            <option value="1h">last hour</option>
+            <option value="6h">last 6 hours</option>
+            <option value="24h" selected>last 24 hours</option>
+            <option value="7d">last 7 days</option>
+            <option value="all">everything</option>
+          </select>
+          <a id="dl-logs" class="btn" download>Logs file</a>
+        </span>
+        <a id="dl-config" class="btn" download>Config</a>
+      </div>
+    </section>
+
+    <section class="card" id="console-card" hidden>
+      <div class="bar">
+        <h2>Console</h2>
+        <span id="run-status" class="muted"></span>
+        <span class="grow"></span>
+        <button id="clear-out" class="btn ghost">Clear</button>
+      </div>
+      <pre id="out" class="console"></pre>
+    </section>
+
+    <section class="card" id="files-card" hidden>
+      <div class="bar">
+        <h2>Files</h2>
+        <select id="root-select" class="input mono" title="Directory"></select>
+        <div id="crumbs" class="crumbs mono"></div>
+        <span class="grow"></span>
+        <input id="new-name" class="input mono" placeholder="new-file.json" autocomplete="off">
+        <button id="new-btn" class="btn">New file</button>
+        <a id="dl-folder" class="btn ghost" download title="Download this folder as .tar.gz">⬇ Folder</a>
+        <button id="refresh-files" class="btn ghost">Refresh</button>
+      </div>
+      <div class="files">
+        <ul id="file-list" class="file-list mono"></ul>
+        <div class="editor">
+          <div class="bar">
+            <span id="edit-path" class="mono muted">Select a file</span>
+            <span id="edit-status" class="muted"></span>
+            <span class="grow"></span>
+            <a id="dl-file" class="btn ghost" download hidden>⬇ Download</a>
+            <button id="force-btn" class="btn danger" hidden>Save anyway</button>
+            <button id="revert-btn" class="btn ghost" disabled>Revert</button>
+            <button id="save-btn" class="btn primary" disabled>Save</button>
+          </div>
+          <textarea id="editor" class="mono" spellcheck="false" disabled></textarea>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
