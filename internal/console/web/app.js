@@ -199,6 +199,7 @@ function select(t) {
   $("#t-problem").hidden = !t.problem;
   $("#t-state").textContent = "…"; $("#t-state").className = "pill";
   if (state.me.admin) armable($("#delete-target"), "Delete", deleteTarget);
+  $("#images-panel").hidden = true;
   loadServices(t);
   renderActions();
   refreshState(t);
@@ -215,7 +216,7 @@ function select(t) {
 const curRoot = () => state.cur?.roots[state.root];
 function syncRootMode() {
   const ro = curRoot()?.mode !== "rw";
-  $("#new-name").hidden = $("#new-btn").hidden = ro;
+  $("#new-name").hidden = $("#new-btn").hidden = $("#upload-btn").hidden = ro;
 }
 
 /* ---------- compose services ---------- */
@@ -276,10 +277,13 @@ function renderActions() {
   $("#actions").replaceChildren(...t.actions.map((a) => {
     const b = el("button", { class: "btn" + (a.danger ? " danger" : "") });
     const label = state.service && a.scopable ? `${a.label} · ${state.service}` : a.label;
-    if (a.danger) armable(b, label, () => run(t, a));
+    if (a.upload) { b.textContent = label; b.onclick = () => (t.type === "compose" && t.imageDir ? openImages(t, a) : pickDeploy(t, a)); }
+    else if (a.danger) armable(b, label, () => run(t, a));
     else { b.textContent = label; b.onclick = () => run(t, a); }
     b.dataset.blocked = state.service && !a.scopable ? "1" : "";
-    b.title = b.dataset.blocked ? "Applies to the whole project. Choose \"All services\" to use it." : a.name;
+    b.title = b.dataset.blocked ? "Applies to the whole project. Choose \"All services\" to use it."
+      : a.upload ? (t.type === "systemd" ? `Upload a new build to replace ${t.binary}` : "Upload an image archive (docker save) and docker load it")
+      : a.name;
     return b;
   }));
   if (!t.actions.length) $("#actions").append(el("span", { class: "muted", textContent: "No actions granted on this target." }));
@@ -292,19 +296,21 @@ function setRunning(on) {
   $$("#actions button").forEach((b) => (b.disabled = on || !!b.dataset.blocked));
 }
 
+function consoleAppend(s) {
+  const out = $("#out");
+  const stick = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
+  out.append(s);
+  // keep the page light: drop the oldest output past ~200 KB (use "Logs file" for everything)
+  if (out.textContent.length > CONSOLE_MAX) {
+    out.textContent = "… (older output trimmed — download the logs file for the full log)\n" + out.textContent.slice(-CONSOLE_KEEP);
+  }
+  if (stick) out.scrollTop = out.scrollHeight;
+}
+
 async function run(t, a) {
   if (state.running) return;
   setRunning(true);
-  const out = $("#out");
-  const append = (s) => {
-    const stick = out.scrollHeight - out.scrollTop - out.clientHeight < 40;
-    out.append(s);
-    // keep the page light: drop the oldest output past ~200 KB (use "Logs file" for everything)
-    if (out.textContent.length > CONSOLE_MAX) {
-      out.textContent = "… (older output trimmed — download the logs file for the full log)\n" + out.textContent.slice(-CONSOLE_KEEP);
-    }
-    if (stick) out.scrollTop = out.scrollHeight;
-  };
+  const out = $("#out"), append = consoleAppend;
   const svc = a.scopable ? state.service : "";
   if (out.textContent) append("\n");
   append(`── ${t.name}${svc ? " / " + svc : ""} · ${a.label} · ${new Date().toLocaleTimeString()} ──\n`);
@@ -328,6 +334,103 @@ async function run(t, a) {
   }
 }
 
+/* ---------- deploy: upload a new binary / image ---------- */
+
+let deployFor = null;
+function pickDeploy(t, a) {
+  if (state.running) return;
+  deployFor = { t, a, svc: a.scopable ? state.service : "" };
+  const inp = $("#deploy-input");
+  inp.value = "";
+  inp.click();
+}
+
+// file: a File to upload, or { saved: "name.tar", size } to load from the image folder
+async function doDeploy(file) {
+  const { t, a, svc } = deployFor || {};
+  if (!t || state.cur !== t) return;
+  const saved = file.saved;
+  if (saved) file = { name: saved, size: file.size };
+  const sd = t.type === "systemd";
+  const restartName = sd ? "restart" : "up";
+  const canRestart = t.actions.some((x) => x.name === restartName);
+  const where = sd ? `replace ${t.binary}` : `docker load it into ${t.name}${svc ? " (service " + svc + ")" : ""}`;
+  if (!confirm(`${saved ? "Load saved" : "Upload"} ${file.name} (${fmtSize(file.size)}) and ${where}?` + (sd ? "\nThe current binary is backed up first." : ""))) return;
+  const restart = canRestart && confirm(sd
+    ? `Restart ${t.unit} after the upload so the new version runs?\n(Cancel = upload only)`
+    : `Run "up -d"${svc ? " for " + svc : ""} after loading so containers use the new image?\n(Cancel = load only)`);
+  const q = new URLSearchParams();
+  if (svc) q.set("service", svc);
+  if (saved) q.set("file", saved);
+  else if (!sd) q.set("name", file.name.replace(/[^A-Za-z0-9_.@+-]/g, "_").replace(/^[^A-Za-z0-9]+/, "") || "image.tar");
+  if (restart) q.set("restart", "1");
+
+  setRunning(true);
+  const out = $("#out");
+  if (out.textContent) consoleAppend("\n");
+  consoleAppend(`── ${t.name}${svc ? " / " + svc : ""} · ${a.label} · ${file.name} · ${new Date().toLocaleTimeString()} ──\n`);
+  const status = (s) => ($("#run-status").textContent = s);
+  status(saved ? `docker load ${file.name} on ${t.name}…` : `uploading ${file.name}… 0%`);
+  try {
+    await new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      let seen = 0;
+      const flush = () => { if (x.status >= 200 && x.status < 300 && x.responseText.length > seen) { consoleAppend(x.responseText.slice(seen)); seen = x.responseText.length; } };
+      x.open("POST", `/api/targets/${enc(t.name)}/deploy?${q}`);
+      x.setRequestHeader("X-Console", "1");
+      x.upload.onprogress = (e) => e.lengthComputable && status(`uploading ${file.name}… ${Math.round((e.loaded / e.total) * 100)}%`);
+      x.upload.onload = () => status(sd ? `installing on ${t.name}…` : `docker load on ${t.name}…`);
+      x.onprogress = flush;
+      x.onerror = () => { waitForServer(); reject(new HTTPError(0, "console unreachable (reconnecting…)")); };
+      x.onload = () => {
+        if (x.status === 401) { showLogin(); return reject(new HTTPError(401, "signed out")); }
+        if (x.status < 200 || x.status >= 300) return reject(new HTTPError(x.status, x.responseText.trim() || x.statusText));
+        flush();
+        resolve();
+      };
+      x.send(saved ? null : file);
+    });
+  } catch (e) {
+    consoleAppend("error: " + e.message + "\n");
+  } finally {
+    status("");
+    setRunning(false);
+    refreshState(t);
+    if (state.cur === t && t.roots.length) loadDir(state.cwd);
+    if (state.cur === t && !$("#images-panel").hidden) loadImages(t);
+  }
+}
+
+async function loadImages(t) {
+  const rows = $("#images-rows");
+  $("#images-dir").textContent = t.imageDir;
+  rows.replaceChildren(el("tr", {}, el("td", { class: "muted", textContent: "loading…" })));
+  try {
+    const r = await (await api("GET", `/api/targets/${enc(t.name)}/images`)).json();
+    if (state.cur !== t) return;
+    rows.replaceChildren(...r.files.map((f) => el("tr", {},
+      el("td", { class: "mono", textContent: f.name }),
+      el("td", { class: "num muted", textContent: fmtSize(f.size) }),
+      el("td", { class: "num muted", textContent: new Date(f.mod).toLocaleString() }),
+      el("td", { class: "num" }, el("button", { class: "btn", textContent: "Load", title: "docker load -i " + f.name,
+        onclick: () => { if (!state.running) { deployFor.svc = state.service; doDeploy({ saved: f.name, size: f.size }); } } })))));
+    if (!r.files.length) rows.replaceChildren(el("tr", {}, el("td", { class: "muted", textContent: "No image archives in this folder yet. Copy one there, or Upload new." })));
+  } catch (e) {
+    rows.replaceChildren(el("tr", {}, el("td", { class: "err", textContent: e.message })));
+  }
+}
+
+function openImages(t, a) {
+  deployFor = { t, a, svc: state.service };
+  $("#images-panel").hidden = false;
+  loadImages(t);
+}
+$("#images-close").addEventListener("click", () => ($("#images-panel").hidden = true));
+$("#images-refresh").addEventListener("click", () => state.cur && loadImages(state.cur));
+$("#images-upload").addEventListener("click", () => { const { t, a } = deployFor || {}; if (t && state.cur === t) pickDeploy(t, a); });
+
+$("#deploy-input").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) doDeploy(f); });
+
 /* =========================================================== admin: targets */
 
 function splitArgs(s) {
@@ -349,11 +452,14 @@ function openForm(view) {
   $("#form-title").textContent = t ? "Edit " + t.name : "Add target";
   $("#form-error").textContent = "";
   $("#vol-status").textContent = "";
+  $("#detect-status").textContent = "";
   if (t) {
     f.name.value = t.name;
     f.type.value = t.type;
     f.description.value = t.description || "";
     f.unit.value = t.unit || "";
+    f.binary.value = t.binary || "";
+    f.imageDir.value = t.imageDir || "";
     f.dir.value = t.dir || "";
     f.dirs.value = (t.dirs || []).join("\n");
     f.composeFiles.value = (t.composeFiles || []).join("\n");
@@ -403,6 +509,20 @@ $("#add-volumes").addEventListener("click", async () => {
   }
 });
 
+$("#detect-binary").addEventListener("click", async () => {
+  const f = $("#target-form"), st = $("#detect-status");
+  const unit = f.unit.value.trim();
+  if (!unit) { st.textContent = "enter the unit first"; return; }
+  st.textContent = "reading ExecStart…";
+  try {
+    const r = await (await api("GET", `/api/admin/detect-binary?unit=${enc(unit)}`)).json();
+    f.binary.value = r.path;
+    st.textContent = r.warning ? "⚠ " + r.warning : "found in the unit's ExecStart; save to apply";
+  } catch (e) {
+    st.textContent = e.message;
+  }
+});
+
 async function submitTarget(e) {
   e.preventDefault();
   const f = $("#target-form");
@@ -419,6 +539,8 @@ async function submitTarget(e) {
     dir: f.dir.value.trim() || undefined,
     dirs: lines(f.dirs.value),
     unit: sd ? f.unit.value.trim() : undefined,
+    binary: sd ? f.binary.value.trim() || undefined : undefined,
+    imageDir: sd ? undefined : f.imageDir.value.trim() || undefined,
     composeFiles: sd ? [] : lines(f.composeFiles.value),
     commands, readOnly: f.readOnly.checked, sudo: f.sudo.checked,
   };
@@ -650,6 +772,10 @@ async function loadDir(path) {
         onclick: () => (e.dir ? loadDir(p) : openFile(p)),
       }, el("span", { class: "fname", textContent: e.name + (e.dir ? "/" : "") + (e.link ? " ↪" : "") }),
          el("span", { class: "fsize", textContent: e.dir ? "" : fmtSize(e.size) }),
+         !e.dir && curRoot()?.mode === "rw"
+           ? el("a", { class: "fdl", href: "#", title: "Replace with an uploaded file (e.g. a new binary)", textContent: "⇪",
+                       onclick: (ev) => { ev.preventDefault(); ev.stopPropagation(); pickUpload(p); } })
+           : "",
          el("a", { class: "fdl", href: fileURL("download", p), download: "", title: e.dir ? "Download folder (.tar.gz)" : "Download",
                    textContent: "⬇", onclick: (ev) => ev.stopPropagation() })));
     }
@@ -730,6 +856,69 @@ async function save(force = false) {
   }
 }
 
+/* ---------- uploads (binaries etc.) ---------- */
+
+// Raw body POST with progress. The server writes a temp file and renames it
+// over the old one, so a running service binary can be replaced.
+function sendUpload(url, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", url);
+    x.setRequestHeader("X-Console", "1");
+    x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    x.onerror = () => { waitForServer(); reject(new HTTPError(0, "console unreachable (reconnecting…)")); };
+    x.onload = () => {
+      if (x.status === 401) { showLogin(); return reject(new HTTPError(401, "signed out")); }
+      if (x.status < 200 || x.status >= 300) return reject(new HTTPError(x.status, x.responseText.trim() || x.statusText));
+      resolve(JSON.parse(x.responseText));
+    };
+    x.send(file);
+  });
+}
+
+let uploadDest = null; // null: upload into the current folder under the file's own name
+function pickUpload(dest = null) {
+  uploadDest = dest;
+  const inp = $("#upload-input");
+  inp.value = "";
+  inp.click();
+}
+
+async function doUpload(file) {
+  const t = state.cur;
+  let dest = uploadDest ?? join(state.cwd, file.name);
+  if (uploadDest === null && file.name.includes("/")) return;
+  let exists = uploadDest !== null;
+  if (!exists) {
+    try {
+      const entries = await (await api("GET", fileURL("files", state.cwd))).json();
+      exists = entries.some((e) => e.name === file.name && !e.dir);
+    } catch { /* the server re-checks */ }
+  }
+  if (exists && !confirm(`Replace ${dest} with ${file.name} (${fmtSize(file.size)})?\nThe current version is backed up first.`)) return;
+  const btn = $("#upload-btn");
+  btn.disabled = true;
+  setStatus(`uploading ${file.name}… 0%`);
+  try {
+    const url = fileURL("upload", dest) + (exists ? "&overwrite=1" : "") + (file.name.includes(".") ? "" : "&exec=1");
+    const res = await sendUpload(url, file, (f) => setStatus(`uploading ${file.name}… ${Math.round(f * 100)}%`));
+    setStatus(`uploaded ${dest} · ${fmtSize(res.bytes)} · sha256 ${res.sha256.slice(0, 12)}…` +
+      (res.backup ? ` · previous version kept at ${res.backup}` : ""), "saved");
+    $("#edit-status").title = "sha256 " + res.sha256;
+    if (state.cur === t) loadDir(state.cwd);
+    // a new binary only takes effect after a restart
+    const restart = t.actions.find((a) => a.name === "restart");
+    if (res.replaced && restart && state.cur === t && !state.running &&
+        confirm(`Uploaded ${dest}.\nRestart ${t.unit || t.name} now so it runs the new version?`)) {
+      run(t, restart);
+    }
+  } catch (e) {
+    setStatus("upload failed: " + e.message, "err");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 /* =========================================================== wiring */
 
 $("#add-target").addEventListener("click", () => openForm(null));
@@ -769,6 +958,8 @@ $("#new-btn").addEventListener("click", () => {
   $("#new-name").value = "";
   openFile(join(state.cwd, name), true);
 });
+$("#upload-btn").addEventListener("click", () => pickUpload(null));
+$("#upload-input").addEventListener("change", (e) => { const f = e.target.files[0]; if (f && state.cur) doUpload(f); });
 window.addEventListener("beforeunload", (e) => { if (isDirty() || state.running) e.preventDefault(); });
 
 startApp();

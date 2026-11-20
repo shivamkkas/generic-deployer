@@ -50,15 +50,24 @@ func (s *Server) selfAction(w http.ResponseWriter, r *http.Request, t *Target, a
 		log.Printf("audit: user=%s ip=%s target=%s action=restart (self, in 2s)", who, r.RemoteAddr, t.Name)
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "$ %s\n\nThis is the deploy console itself: it restarts in 2 seconds.\nThe page reconnects automatically; you stay signed in.\n\n[exit 0 after 0s]\n", strings.Join(a.argv, " "))
-		go func() {
-			time.Sleep(2 * time.Second)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			if out, err := t.cmd(ctx, []string{"systemctl", "restart", "--no-block", t.Unit}).CombinedOutput(); err != nil {
-				log.Printf("self-restart failed: %v %s", err, out)
-			}
-		}()
+		s.scheduleSelfRestart(t, "", "")
 		return true
 	}
 	return false
+}
+
+// scheduleSelfRestart restarts the console's own unit ~2s from now, so the
+// current reply can reach the browser first. who/ip are logged when given.
+func (s *Server) scheduleSelfRestart(t *Target, who, ip string) {
+	if who != "" {
+		log.Printf("audit: user=%s ip=%s target=%s action=restart (self, in 2s)", who, ip, t.Name)
+	}
+	go func() {
+		time.Sleep(2 * time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if out, err := t.cmd(ctx, []string{"systemctl", "restart", "--no-block", t.Unit}).CombinedOutput(); err != nil {
+			log.Printf("self-restart failed: %v %s", err, out)
+		}
+	}()
 }

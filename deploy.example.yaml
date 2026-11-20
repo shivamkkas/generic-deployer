@@ -21,6 +21,7 @@ sudo:
 # Every save keeps the previous version here: <backupDir>/<target>/<folder>/<path>.<timestamp>
 backupDir: /var/lib/generic-deploy/backups
 maxFileBytes: 1048576        # largest file the editor opens (downloads have no limit)
+maxUploadBytes: 1073741824   # largest file upload, e.g. a service binary (default 1 GiB)
 
 # targetsFile: targets.yaml  # default: next to this file
 # usersFile:   users.yaml    # default: next to this file
@@ -31,8 +32,10 @@ maxFileBytes: 1048576        # largest file the editor opens (downloads have no 
 #     type: compose
 #     dir: /opt/alarm-engine
 #     dirs: [/srv/alarm-engine/data]          # extra folders (volumes, config) for the file browser
+#     imageDir: /opt/alarm-engine/images      # optional: keep "Load image" uploads here
 #   - name: edge-deployer
 #     type: systemd
 #     unit: edge-deployer.service
+#     binary: /opt/edge-deployer/edge-deployer   # "Update binary" replaces this file
 #     dir: /opt/edge-deployer
 #     sudo: true

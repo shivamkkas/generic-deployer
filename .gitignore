@@ -13,3 +13,6 @@ sessions.json
 .idea/
 .vscode/
 .DS_Store
+
+# local Claude Code notes
+CLAUDE.md

@@ -61,6 +61,14 @@
         </label>
         <label class="wide">Description<input name="description" class="input" placeholder="optional"></label>
         <label class="only-systemd">Unit<input name="unit" class="input mono" placeholder="edge-deployer.service"></label>
+        <label class="wide only-systemd">Service binary <span class="muted">(optional: the file "⇪ Update binary" replaces, e.g. /opt/myapp/myapp)</span>
+          <span class="row-inline"><input name="binary" class="input mono" placeholder="/opt/edge-deployer/edge-deployer">
+          <button type="button" id="detect-binary" class="btn">Detect from unit</button></span>
+          <span id="detect-status" class="muted small"></span>
+        </label>
+        <label class="wide only-compose">Image upload folder <span class="muted">(optional: keep "⇪ Load image" archives here; empty = temp, deleted after docker load)</span>
+          <input name="imageDir" class="input mono" placeholder="/opt/alarm-engine/images">
+        </label>
         <label class="wide"><span id="dir-label">Compose project directory</span>
           <input name="dir" class="input mono" placeholder="/opt/alarm-engine">
         </label>
@@ -146,6 +154,18 @@
         <span id="svc-note" class="muted small"></span>
       </div>
       <div id="actions" class="actions"></div>
+      <div id="images-panel" class="images-panel" hidden>
+        <div class="bar">
+          <strong>Load a saved image</strong>
+          <span id="images-dir" class="muted small mono"></span>
+          <span class="grow"></span>
+          <button id="images-upload" class="btn">⇪ Upload new…</button>
+          <button id="images-refresh" class="btn ghost">Refresh</button>
+          <button id="images-close" class="btn ghost">Close</button>
+        </div>
+        <p class="muted small">Copy archives here on the server (e.g. <span class="mono">docker save app:1.2 | gzip &gt; app-1.2.tar.gz</span>, then scp/USB), then Load runs <span class="mono">docker load -i</span>. Older files stay, so you can load one again to roll back.</p>
+        <table class="table"><tbody id="images-rows"></tbody></table>
+      </div>
       <div class="dl-row" id="dl-row">
         <span class="muted small">Download:</span>
         <span id="dl-logs-wrap">
@@ -180,6 +200,9 @@
         <span class="grow"></span>
         <input id="new-name" class="input mono" placeholder="new-file.json" autocomplete="off">
         <button id="new-btn" class="btn">New file</button>
+        <button id="upload-btn" class="btn" title="Upload a file (any size, binary too) into this folder">⇪ Upload</button>
+        <input id="upload-input" type="file" hidden>
+        <input id="deploy-input" type="file" hidden>
         <a id="dl-folder" class="btn ghost" download title="Download this folder as .tar.gz">⬇ Folder</a>
         <button id="refresh-files" class="btn ghost">Refresh</button>
       </div>

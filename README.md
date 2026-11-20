@@ -58,8 +58,10 @@ needs an SSH login, and usually root.
 
 | | Docker Compose target | systemd target |
 |---|---|---|
-| **Actions** | Status · Pull · Up -d · Force recreate · Restart · Stop · Down · Logs · Validate | Status · Start · Restart · Stop · Enable · Disable · Logs · Daemon reload |
-| **Per service** | Pick one service in the stack; actions run only on it (`up -d --no-deps <svc>`) | — |
+| **Actions** | Status · Stats · Start · Pull · Up -d · Force recreate · Restart · Stop · Down · Logs · Validate | Stats · Status · Start · Restart · Stop · Enable · Disable · Logs · Daemon reload |
+| **Stats** | `docker compose stats --no-stream`: CPU, memory, network, disk I/O, PIDs per container | State, uptime, CPU now and total, memory (and peak), tasks, restarts, process list |
+| **Deploy without a registry** | ⇪ Load image: upload a `docker save` archive → `docker load` → `up -d` | ⇪ Update binary: upload a build that replaces the service's binary → restart |
+| **Per service** | Pick one service in the stack (services behind `profiles:` included); actions run only on it (`up -d --no-deps <svc>`) | — |
 | **Live output** | Command output streams into the browser console | same |
 | **Downloads** | Full logs file (1h / 6h / 24h / 7d / all), resolved `docker compose config` | Full journal, `systemctl cat` unit |
 | **Files** | Browse, edit, create, download the project dir, extra dirs, service volume folders | Browse/edit/download its config & data dirs |
@@ -246,6 +248,7 @@ sudo:
 
 backupDir: /var/lib/generic-deploy/backups
 maxFileBytes: 1048576       # largest file the editor opens (downloads are unlimited)
+maxUploadBytes: 1073741824  # largest upload (default 1 GiB)
 # targetsFile: targets.yaml # default: next to deploy.yaml
 # usersFile:   users.yaml   # default: next to deploy.yaml
 ```
@@ -265,6 +268,29 @@ targets once with a `targets:` list in `deploy.yaml`; after the first start the 
 3. **Edit files:** choose a folder, open a file, edit, **Save** (Ctrl+S). Invalid JSON/YAML/CSV is refused with the
    line number unless you click **Save anyway**. The previous version is kept in `backupDir`.
 4. **Download:** ⬇ next to any file or folder, **Logs file**, or **Config**.
+5. **Upload / update a binary:** in a folder you have read-write, **⇪ Upload** puts a file there (any size, binary
+   too). To replace an existing file with a differently named local file (e.g. `myapp-linux-amd64` → `myapp`),
+   click ⇪ on that file's row. The upload is written to a temp file next to it and renamed over the old one, so it
+   works while the service is running (no "text file busy"); the old file's mode and owner are kept and the
+   previous version goes to `backupDir`. Afterwards the console offers to **Restart** the target so the new
+   version runs. New files without an extension are made executable (0755).
+
+   For a systemd service, add the folder holding its binary (e.g. `/opt/myapp`) to the target's folders and give
+   operators `rw` on it plus the `restart` action.
+6. **Deploy a build without a registry:** for builds that can't be pulled.
+   - **systemd:** set **Service binary** in the target (or click **Detect from unit** to read it from `ExecStart`).
+     The target gets an **⇪ Update binary** button: pick the new build (any file name), it replaces the binary at
+     that path (atomically, mode/owner kept, old version backed up, symlinks followed), then optionally restarts.
+   - **compose:** **⇪ Load image** takes an archive from `docker save` (plain or `.gz`), runs `docker load`, then
+     optionally `up -d` (for the chosen service or the whole project) so containers use the new image. Set
+     **Image upload folder** to keep the archives there; otherwise they are deleted after loading.
+   - **compose, no network / firewalled server:** with an **Image upload folder** set, **⇪ Load image** opens a
+     list of the archives in that folder. Copy them there any way you like (`scp`, USB, a file share), click
+     **Load**, and the console runs `docker load -i <file>` (then optionally `up -d`). Old archives stay, so
+     loading an earlier one is a rollback. Only plain files directly in the folder are offered (symlinks that
+     lead elsewhere are refused).
+
+   Grant users the `deploy` action to allow it; restarting afterwards also needs `restart` (systemd) / `up` (compose).
 
 ## 👥 Users & permissions
 
@@ -272,7 +298,7 @@ Sidebar → **Users & permissions** → **+ New user**. For each target, tick:
 
 | Grant | Effect |
 |---|---|
-| **Actions** | Which buttons the user gets (or *All actions*). |
+| **Actions** | Which buttons the user gets (or *All actions*). Includes **Stats** and **deploy** (⇪ Update binary / ⇪ Load image); restarting after a deploy also needs **restart** (systemd) or **up** (compose). |
 | **Services** *(compose)* | Limit the user to these services. Every action then targets only those services, and whole-project actions (Down, Validate, custom scripts) are hidden. Leave empty for the whole stack. |
 | **Folders** | Directories the user can open, each **read-only** or **read-write**. Must be inside the target's folders. One-click suggestions include each service's volume folder. |
 
@@ -306,6 +332,8 @@ checked at startup; if it's wrong you'll see a warning in the journal and the UI
 - **Audit log:** logins, actions (with exit code), saves, downloads, and target/user changes →
   `journalctl -u generic-deploy`.
 - **One action at a time per target**; commands keep running if the browser tab closes.
+- **Uploads/deploys** are size-limited (`maxUploadBytes`), audited with their SHA-256, and back up what they replace.
+  Saved images can only be loaded from plain files directly inside the target's image folder.
 
 > 🔒 **Recommendations:** keep `deploy.yaml` at `chmod 600`; enable `tlsCert`/`tlsKey` or put the console behind
 > a TLS reverse proxy if it's reachable beyond a trusted network. Anyone with an **admin** login effectively controls
@@ -328,6 +356,10 @@ GET  /api/targets/{t}/files?root=N&path=
 GET  /api/targets/{t}/file?root=N&path=
 PUT  /api/targets/{t}/file?root=N&path=[&create=1][&force=1]
 GET  /api/targets/{t}/download?root=N&path=           file or folder (.tar.gz)
+POST /api/targets/{t}/upload?root=N&path=[&overwrite=1][&exec=1]   raw body; atomic replace
+POST /api/targets/{t}/deploy?[service=][&name=x.tar][&restart=1]   raw body; new binary / docker image
+POST /api/targets/{t}/deploy?file=x.tar[&service=][&restart=1]      compose: docker load a file already in imageDir
+GET  /api/targets/{t}/images                                        compose: archives in imageDir
 POST|PUT|DELETE /api/admin/targets[/{t}]              admin
 GET|POST|PUT|DELETE /api/admin/users[/{u}]            admin
 ```
@@ -336,6 +368,24 @@ Example:
 
 ```bash
 curl -u ops:secret -H 'X-Console: 1' -X POST "http://server:8090/api/targets/ollama/run/restart?service=chroma"
+
+# ship a new binary to a systemd service and restart it (e.g. from CI)
+curl -fu ops:secret -H 'X-Console: 1' --data-binary @dist/myapp-linux-amd64 \
+  "http://server:8090/api/targets/myapp/upload?root=0&path=myapp&overwrite=1"
+curl -fu ops:secret -H 'X-Console: 1' -X POST "http://server:8090/api/targets/myapp/run/restart"
+
+# or in one call: replace the target's configured binary and restart
+curl -fu ops:secret -H 'X-Console: 1' --data-binary @dist/myapp-linux-amd64 \
+  "http://server:8090/api/targets/myapp/deploy?restart=1"
+
+# compose: load an image built elsewhere (docker save myimg:tag | gzip > img.tar.gz) and recreate one service
+curl -fu ops:secret -H 'X-Console: 1' --data-binary @img.tar.gz \
+  "http://server:8090/api/targets/ollama/deploy?name=img.tar.gz&service=api&restart=1"
+
+# firewalled server: copy the archive into the image folder yourself, then load it from there
+scp img-1.3.tar.gz server:/opt/ollama/images/
+curl -fu ops:secret -H 'X-Console: 1' -X POST \
+  "http://server:8090/api/targets/ollama/deploy?file=img-1.3.tar.gz&service=api&restart=1"
 ```
 
 ## 🩺 Troubleshooting
@@ -359,7 +409,10 @@ internal/console/
   config.go             deploy.yaml + target validation
   store.go              targets.yaml (admin-managed targets)
   users.go              users.yaml, grants, sessions
-  actions.go            fixed compose/systemd actions, service discovery
+  actions.go            fixed compose/systemd actions, service discovery (incl. profiles)
+  stats.go              systemd resource stats
+  upload.go             atomic file upload (replace running binaries)
+  deploy.go             Update binary / Load image / load saved images, detect binary
   server.go             HTTP API, auth, permissions, action runner
   files.go              path confinement, editor I/O, content validation
   downloads.go          file/folder/logs/config downloads

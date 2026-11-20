@@ -18,16 +18,17 @@ import (
 // Targets are managed by the admin from the
 // UI and stored in TargetsFile; Targets here only seed that file the first time.
 type Config struct {
-	Listen       string    `yaml:"listen"`
-	TLSCert      string    `yaml:"tlsCert"`
-	TLSKey       string    `yaml:"tlsKey"`
-	Auth         Auth      `yaml:"auth"`
-	BackupDir    string    `yaml:"backupDir"`
-	MaxFileBytes int64     `yaml:"maxFileBytes"`
-	TargetsFile  string    `yaml:"targetsFile"`
-	UsersFile    string    `yaml:"usersFile"`
-	Sudo         SudoCfg   `yaml:"sudo"`
-	Targets      []*Target `yaml:"targets"`
+	Listen         string    `yaml:"listen"`
+	TLSCert        string    `yaml:"tlsCert"`
+	TLSKey         string    `yaml:"tlsKey"`
+	Auth           Auth      `yaml:"auth"`
+	BackupDir      string    `yaml:"backupDir"`
+	MaxFileBytes   int64     `yaml:"maxFileBytes"`
+	MaxUploadBytes int64     `yaml:"maxUploadBytes"`
+	TargetsFile    string    `yaml:"targetsFile"`
+	UsersFile      string    `yaml:"usersFile"`
+	Sudo           SudoCfg   `yaml:"sudo"`
+	Targets        []*Target `yaml:"targets"`
 }
 
 // SudoCfg lets the console (running as a normal user) act as root on targets
@@ -53,7 +54,9 @@ type Target struct {
 	ComposeFiles []string            `yaml:"composeFiles,omitempty" json:"composeFiles,omitempty"`
 	Commands     map[string][]string `yaml:"commands,omitempty"     json:"commands,omitempty"` // extra buttons, run in Dir
 	ReadOnly     bool                `yaml:"readOnly,omitempty"     json:"readOnly,omitempty"`
-	Sudo         bool                `yaml:"sudo,omitempty"         json:"sudo,omitempty"` // run commands and file access as root via sudo
+	Sudo         bool                `yaml:"sudo,omitempty"         json:"sudo,omitempty"`     // run commands and file access as root via sudo
+	Binary       string              `yaml:"binary,omitempty"       json:"binary,omitempty"`   // systemd: executable the "Update binary" upload replaces
+	ImageDir     string              `yaml:"imageDir,omitempty"     json:"imageDir,omitempty"` // compose: keep uploaded image archives here (else temp)
 
 	Roots   []string `yaml:"-" json:"roots"`             // Dir + Dirs, deduped: what the file browser can open
 	Problem string   `yaml:"-" json:"problem,omitempty"` // e.g. a configured dir that no longer exists
@@ -94,6 +97,9 @@ func (c *Config) validate() error {
 	if c.MaxFileBytes <= 0 {
 		c.MaxFileBytes = 1 << 20
 	}
+	if c.MaxUploadBytes <= 0 {
+		c.MaxUploadBytes = 1 << 30
+	}
 	if c.TargetsFile == "" {
 		c.TargetsFile = "targets.yaml"
 	}
@@ -129,6 +135,9 @@ func (t *Target) validate(strict bool) error {
 		if t.Unit != "" {
 			return errors.New("unit only applies to systemd targets")
 		}
+		if t.Binary != "" {
+			return errors.New("binary only applies to systemd targets")
+		}
 		for _, f := range t.ComposeFiles {
 			cf := filepath.Clean(f)
 			if f == "" || filepath.IsAbs(cf) || cf == ".." || strings.HasPrefix(cf, "../") {
@@ -141,6 +150,9 @@ func (t *Target) validate(strict bool) error {
 		}
 		if len(t.ComposeFiles) > 0 {
 			return errors.New("compose files only apply to compose targets")
+		}
+		if t.ImageDir != "" {
+			return errors.New("image folder only applies to compose targets")
 		}
 	default:
 		return fmt.Errorf("type must be compose or systemd, got %q", t.Type)
@@ -185,6 +197,34 @@ func (t *Target) validate(strict bool) error {
 			return err
 		}
 		t.Dirs[i] = d
+	}
+	if t.Binary != "" {
+		if !filepath.IsAbs(t.Binary) {
+			return fmt.Errorf("binary %q must be an absolute path", t.Binary)
+		}
+		t.Binary = filepath.Clean(t.Binary)
+		if fi, err := t.fs().stat(t.Binary); err == nil && !fi.regular {
+			return fmt.Errorf("binary %q is not a regular file", t.Binary)
+		} else if err != nil {
+			if pfi, perr := t.fs().stat(filepath.Dir(t.Binary)); perr != nil || !pfi.dir {
+				if strict {
+					return fmt.Errorf("binary %q: its folder does not exist", t.Binary)
+				}
+				problems = append(problems, fmt.Sprintf("binary folder %s is missing", filepath.Dir(t.Binary)))
+			}
+		}
+	}
+	if t.ImageDir != "" {
+		if !filepath.IsAbs(t.ImageDir) {
+			return fmt.Errorf("image folder %q must be an absolute path", t.ImageDir)
+		}
+		t.ImageDir = filepath.Clean(t.ImageDir)
+		if fi, err := t.fs().stat(t.ImageDir); err != nil || !fi.dir {
+			if strict {
+				return fmt.Errorf("image folder %q is not an existing directory", t.ImageDir)
+			}
+			problems = append(problems, fmt.Sprintf("image folder %s is missing", t.ImageDir))
+		}
 	}
 	t.Problem = strings.Join(problems, "; ")
 	return nil

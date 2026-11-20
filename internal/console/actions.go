@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -22,8 +23,10 @@ type Action struct {
 	Label    string `json:"label"`
 	Danger   bool   `json:"danger,omitempty"`   // UI asks for a second click
 	Scopable bool   `json:"scopable,omitempty"` // can be limited to one compose service
+	Upload   bool   `json:"upload,omitempty"`   // takes a file: POST /deploy, not /run
 	argv     []string
-	scoped   []string // argv used when a service is given; the service name is appended
+	fn       func(ctx context.Context, w io.Writer) error // runs in Go instead of argv (argv is then only shown)
+	scoped   []string                                     // argv used when a service is given; the service name is appended
 	timeout  time.Duration
 }
 
@@ -54,6 +57,8 @@ func (t *Target) Actions() []Action {
 	switch t.Type {
 	case "compose":
 		cadd("ps", "Status", false, time.Minute, []string{"ps", "-a"}, []string{"ps", "-a"})
+		cadd("stats", "Stats", false, time.Minute, []string{"stats", "--no-stream"}, []string{"stats", "--no-stream"})
+		cadd("start", "Start", false, 10*time.Minute, []string{"start"}, []string{"start"})
 		cadd("pull", "Pull", false, 30*time.Minute, []string{"pull"}, []string{"pull"})
 		cadd("up", "Up -d", false, 30*time.Minute, []string{"up", "-d", "--remove-orphans"}, []string{"up", "-d", "--no-deps"})
 		cadd("recreate", "Force recreate", true, 30*time.Minute,
@@ -64,9 +69,12 @@ func (t *Target) Actions() []Action {
 		cadd("logs", "Logs (last 200)", false, time.Minute,
 			[]string{"logs", "--no-color", "--timestamps", "--tail", "200"}, []string{"logs", "--no-color", "--timestamps", "--tail", "200"})
 		cadd("config", "Validate", false, time.Minute, []string{"config", "--quiet"}, nil)
+		out = append(out, Action{Name: deployAction, Label: "⇪ Load image", Danger: true, Scopable: true, Upload: true})
 	case "systemd":
 		u := t.Unit
 		add("status", "Status", false, time.Minute, "systemctl", "status", "--no-pager", "--full", u)
+		out = append(out, Action{Name: "stats", Label: "Stats", argv: []string{"systemctl", "show", u, "(resources)"}, timeout: time.Minute,
+			fn: func(ctx context.Context, w io.Writer) error { return systemdStats(ctx, w, u) }})
 		add("start", "Start", false, 5*time.Minute, "systemctl", "start", u)
 		add("restart", "Restart", true, 5*time.Minute, "systemctl", "restart", u)
 		add("stop", "Stop", true, 5*time.Minute, "systemctl", "stop", u)
@@ -74,6 +82,9 @@ func (t *Target) Actions() []Action {
 		add("disable", "Disable", true, time.Minute, "systemctl", "disable", u)
 		add("logs", "Logs (last 200)", false, time.Minute, "journalctl", "-u", u, "-n", "200", "--no-pager", "-o", "short-iso")
 		add("daemon-reload", "Daemon reload", false, time.Minute, "systemctl", "daemon-reload")
+		if t.Binary != "" {
+			out = append(out, Action{Name: deployAction, Label: "⇪ Update binary", Danger: true, Upload: true})
+		}
 	}
 	names := make([]string, 0, len(t.Commands))
 	for n := range t.Commands {
@@ -128,7 +139,13 @@ func (t *Target) Services(ctx context.Context) ([]Service, error) {
 		}
 		return out, err
 	}
-	if out, err := run("config", "--format", "json"); err == nil {
+	// --profile * lists services behind profiles too, so they can be picked and
+	// acted on by name (compose activates a named service's profile itself).
+	out, err := run("--profile", "*", "config", "--format", "json")
+	if err != nil {
+		out, err = run("config", "--format", "json")
+	}
+	if err == nil {
 		var cfg struct {
 			Services map[string]struct {
 				Volumes []struct {
@@ -160,9 +177,11 @@ func (t *Target) Services(ctx context.Context) ([]Service, error) {
 		}
 	}
 	// Older compose without --format json: names only.
-	out, err := run("config", "--services")
+	out, err = run("--profile", "*", "config", "--services")
 	if err != nil {
-		return nil, err
+		if out, err = run("config", "--services"); err != nil {
+			return nil, err
+		}
 	}
 	var svcs []Service
 	for _, n := range strings.Fields(string(out)) {

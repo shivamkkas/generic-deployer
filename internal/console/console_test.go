@@ -175,6 +175,7 @@ type harness struct {
 	t   *testing.T
 	h   http.Handler
 	dir string
+	s   *Server
 }
 
 func newHarness(t *testing.T) *harness {
@@ -190,7 +191,7 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &harness{t: t, h: s.Handler(), dir: dir}
+	return &harness{t: t, h: s.Handler(), dir: dir, s: s}
 }
 
 func (hs *harness) do(method, url, user, pass, body string) *httptest.ResponseRecorder {

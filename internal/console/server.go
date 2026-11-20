@@ -77,6 +77,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/targets/{name}/files", s.handleList)
 	mux.HandleFunc("GET /api/targets/{name}/file", s.handleRead)
 	mux.HandleFunc("PUT /api/targets/{name}/file", s.handleWrite)
+	mux.HandleFunc("POST /api/targets/{name}/upload", s.handleUpload)
+	mux.HandleFunc("POST /api/targets/{name}/deploy", s.handleDeploy)
+	mux.HandleFunc("GET /api/targets/{name}/images", s.handleImages)
 	mux.HandleFunc("GET /api/targets/{name}/download", s.handleDownload)
 	mux.HandleFunc("GET /api/targets/{name}/logs", s.handleLogsDownload)
 	mux.HandleFunc("GET /api/targets/{name}/config", s.handleConfigDownload)
@@ -85,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/targets", s.handleTargetCreate)
 	mux.HandleFunc("PUT /api/admin/targets/{name}", s.handleTargetUpdate)
 	mux.HandleFunc("DELETE /api/admin/targets/{name}", s.handleTargetDelete)
+	mux.HandleFunc("GET /api/admin/detect-binary", s.handleDetectBinary)
 	mux.HandleFunc("GET /api/admin/users", s.handleUsers)
 	mux.HandleFunc("POST /api/admin/users", s.handleUserCreate)
 	mux.HandleFunc("PUT /api/admin/users/{name}", s.handleUserUpdate)
@@ -232,6 +236,8 @@ type targetView struct {
 	Type        string     `json:"type"`
 	Description string     `json:"description,omitempty"`
 	Unit        string     `json:"unit,omitempty"`
+	Binary      string     `json:"binary,omitempty"`   // systemd: file the deploy upload replaces
+	ImageDir    string     `json:"imageDir,omitempty"` // compose: folder of saved image archives
 	Dir         string     `json:"dir,omitempty"`
 	Problem     string     `json:"problem,omitempty"`
 	Actions     []Action   `json:"actions"`
@@ -295,7 +301,7 @@ func rootsFor(g *Grant, t *Target) []rootView {
 func (s *Server) view(u *User, t *Target) targetView {
 	g, _ := access(u, t)
 	v := targetView{
-		Name: t.Name, Type: t.Type, Description: t.Description, Unit: t.Unit, Dir: t.Dir, Problem: t.Problem,
+		Name: t.Name, Type: t.Type, Description: t.Description, Unit: t.Unit, Binary: t.Binary, ImageDir: t.ImageDir, Dir: t.Dir, Problem: t.Problem,
 		Actions: actionsFor(g, t), Roots: rootsFor(g, t),
 	}
 	if v.Actions == nil {
@@ -387,6 +393,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown or not permitted action", http.StatusForbidden)
 		return
 	}
+	if a.Upload {
+		http.Error(w, a.Label+" needs a file: POST it to /api/targets/"+t.Name+"/deploy", http.StatusBadRequest)
+		return
+	}
 	service, ok := s.checkService(w, r, t, g)
 	if !ok {
 		return
@@ -426,7 +436,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	cmd.WaitDelay = 5 * time.Second
 
 	start := time.Now()
-	err = cmd.Run()
+	if a.fn != nil {
+		err = a.fn(ctx, fw) // a non-exit error is shown as "error: …" with exit -1
+	} else {
+		err = cmd.Run()
+	}
 	took := time.Since(start).Round(100 * time.Millisecond)
 	code := 0
 	var ee *exec.ExitError
@@ -629,8 +643,8 @@ func (s *Server) handleTargetDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) auditTarget(r *http.Request, verb string, t *Target) {
-	log.Printf("audit: user=%s ip=%s target=%s %s type=%s unit=%q dirs=%q sudo=%v commands=%q",
-		userFrom(r).Name, r.RemoteAddr, t.Name, verb, t.Type, t.Unit, t.Roots, t.Sudo, t.Commands)
+	log.Printf("audit: user=%s ip=%s target=%s %s type=%s unit=%q binary=%q imageDir=%q dirs=%q sudo=%v commands=%q",
+		userFrom(r).Name, r.RemoteAddr, t.Name, verb, t.Type, t.Unit, t.Binary, t.ImageDir, t.Roots, t.Sudo, t.Commands)
 }
 
 // ---------- admin: users ----------

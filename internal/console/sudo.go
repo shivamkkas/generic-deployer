@@ -81,7 +81,8 @@ type fsOps interface {
 	stat(p string) (fileInfo, error)
 	readDir(p string) ([]entry, error)
 	readFile(p string) ([]byte, error)
-	writeFile(p string, data []byte, create bool) error // existing files are rewritten in place
+	writeFile(p string, data []byte, create bool) error               // existing files are rewritten in place
+	putFile(p string, r io.Reader, replace, exec bool) (int64, error) // atomic replace (temp file + rename), see upload.go
 	cat(w io.Writer, p string) error
 	tarGz(w io.Writer, p string) error
 }

@@ -133,3 +133,8 @@ a.btn { text-decoration: none; display: inline-block; }
   .files { grid-template-columns: 1fr; }
   main { padding: 12px 16px; }
 }
+.row-inline { display: flex; gap: 8px; align-items: center; }
+.row-inline .input { flex: 1; min-width: 0; }
+.images-panel { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.images-panel .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.images-panel td.num { text-align: right; white-space: nowrap; }
